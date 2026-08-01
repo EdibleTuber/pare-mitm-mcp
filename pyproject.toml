@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pare-mitm-mcp"
+version = "0.1.0"
+description = "HTTPS traffic (mitmproxy) MCP worker for PARE"
+requires-python = ">=3.12"
+dependencies = [
+    "mitmproxy>=11.0.0",
+    "mcp>=1.27.0,<2",   # agent_core targets mcp 1.x; 2.0 renamed streamablehttp_client
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
+[project.scripts]
+pare-mitm-mcp = "pare_mitm_mcp.server:main"
+pare-mitm-daemon = "pare_mitm_mcp.daemon.launcher:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pare_mitm_mcp"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
