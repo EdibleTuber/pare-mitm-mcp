@@ -11,10 +11,18 @@ traffic in this version. All tools are risk tier `low`.
 |------|-------------|
 | `list_flows` | Lists captured HTTPS flows as summary rows (`id, ts, kind, method, host, path, scheme, status, content_type, resp_size, error`). Filterable by `host`, `method`, `status`, `since` (unix ts), `limit`. `kind="error"` rows (failed TLS/connection attempts, e.g. cert pinning) are surfaced, not hidden. |
 | `get_flow` | Full detail for one flow id: request line + headers + body, response headers + body. JSON bodies are pretty-printed; binary bodies are summarised as `<binary N bytes>`. |
-| `search_flows` | Regex/substring search across a scope (`url`, `headers`, `req-body`, `resp-body`, `all`); returns matching flow ids with a context snippet. Runs daemon-side. |
+| `search_flows` | Regex/substring search across a scope (`url`, `headers`, `req-body`, `resp-body`, `all`); returns matching flow ids with a context snippet. Runs daemon-side. A malformed regex comes back as an error result, not an exception. |
 | `capture_health` | Is the proxy reachable? Returns `{reachable, flows, tls_errors, last_flow_ts}`. Used to disambiguate an empty capture: daemon down vs. nothing-triggered-yet vs. pinning breaking the handshake (`tls_errors > 0`). |
 
 Tools surface to the model as `mitm_*` when mounted into PARE (`mitm_list_flows`, `mitm_get_flow`, `mitm_search_flows`, `mitm_capture_health`).
+
+If the daemon rejects a request (e.g. `search_flows` with a malformed regex,
+or `list_flows` with a bad filter) or isn't reachable at all, `list_flows`/
+`get_flow`/`search_flows` return a clean `{"error": true, "summary": ...}`
+result instead of raising. `capture_health` handles the unreachable case
+differently — it's not an error result, it's `{reachable: false, flows: 0,
+tls_errors: 0, last_flow_ts: null}`, since "daemon down" is itself the
+useful status.
 
 ## Daemon model
 
@@ -51,8 +59,9 @@ mitmweb -s daemon/addon.py \
   - `pare-mitm-daemon down` — v1 does not kill the process (mitmweb is
     operator-launched in its own session); it prints the `pkill` invocation
     to run manually.
-  - The PARE-side `/mitm up` / `/mitm status` commands call into this same
-    launcher.
+  - The PARE-side `/mitm up` / `/mitm down` / `/mitm status` commands call
+    into this same launcher; an unrecognized subcommand prints a usage
+    message rather than doing anything.
 
 ## Security note
 
@@ -99,7 +108,7 @@ worker talks to the daemon over the control API):
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `PARE_MITM_CONTROL_HOST` | `127.0.0.1` | Bind/connect host for the control API (health/flows/search). Localhost-only by design. |
+| `PARE_MITM_CONTROL_HOST` | `127.0.0.1` | Bind/connect host for the control API (health/flows/search). Localhost-only by design — the control API has no auth, so binding it to a non-loopback host prints a startup warning (it would expose captured traffic to anything that can reach it). |
 | `PARE_MITM_CONTROL_PORT` | `8788` | Port for the control API. |
 | `PARE_MITM_PROXY_PORT` | `8080` | Port mitmproxy listens on for device traffic (bound `0.0.0.0` — see security note). |
 | `PARE_MITM_WEB_PORT` | `8081` | Port for the mitmweb human UI (bound `127.0.0.1`). |
@@ -172,9 +181,10 @@ Run the full suite:
 pytest
 ```
 
-30 tests cover the contract/conformance, the `FlowStore` ring buffer and
+37 tests cover the contract/conformance, the `FlowStore` ring buffer and
 search, the `ControlServer` HTTP routes, the mitmproxy `addon` (flow/error
-→ record mapping), the `DaemonClient`, the four tool handlers, and the
+→ record mapping), the `DaemonClient`, the four tool handlers (including
+the error-envelope behavior on daemon rejections), and the
 `pare-mitm-daemon` launcher (idempotent `up`, bind-split command
 construction). No live device or running `mitmweb` process is required —
 the daemon-side tests exercise a real `ControlServer` fixture directly.
