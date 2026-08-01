@@ -1,10 +1,34 @@
 from __future__ import annotations
 
+import json
+
 from mcp.server.fastmcp import FastMCP
+
+from agent_core.workers.risk import RISK_TIER_META_KEY
+from pare_mitm_mcp.contract import TOOL_SPECS
+
+try:
+    from pare_mitm_mcp import tools as tools_mod
+except Exception:            # tools not yet implemented
+    tools_mod = None
 
 
 def build_server() -> FastMCP:
-    return FastMCP("pare-mitm-mcp")
+    server = FastMCP("pare-mitm-mcp")
+    for spec in TOOL_SPECS:
+        handler = getattr(tools_mod, spec.name, None) if tools_mod else None
+        if handler is None:
+            handler = _stub_for(spec.name)
+        server.add_tool(handler, name=spec.name, description=spec.description,
+                        meta={RISK_TIER_META_KEY: spec.risk_tier})
+    return server
+
+
+def _stub_for(name: str):
+    async def _stub(**kwargs) -> str:
+        return json.dumps({"summary": f"{name} not implemented in this build"})
+    _stub.__name__ = name
+    return _stub
 
 
 def main() -> None:
