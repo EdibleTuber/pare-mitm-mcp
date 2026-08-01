@@ -42,6 +42,17 @@ async def test_search_flows(wired):
     assert out.get("error") is not True and len(out["hits"]) == 2
 
 
+async def test_search_flows_bad_regex_returns_error_envelope(wired):
+    out = json.loads(await tools.search_flows("("))
+    assert out["error"] is True
+
+
+async def test_list_flows_bad_status_filter_returns_error_envelope(wired):
+    # a non-integer status the control server can't parse triggers a 400
+    out = json.loads(await tools.list_flows(status="not-a-number"))
+    assert out["error"] is True
+
+
 async def test_daemon_down_returns_reachable_false_and_error_envelope(monkeypatch):
     # capture_health reports reachable:false (not an error) when the daemon is down
     from pare_mitm_mcp.client import DaemonClient

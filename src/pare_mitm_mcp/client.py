@@ -10,6 +10,15 @@ class DaemonUnreachable(Exception):
     pass
 
 
+class DaemonError(Exception):
+    """Daemon responded but with a non-200 status (e.g. a bad search regex)."""
+
+    def __init__(self, code: int, detail: str) -> None:
+        self.code = code
+        self.detail = detail
+        super().__init__(f"daemon returned {code}: {detail}")
+
+
 class DaemonClient:
     def __init__(self, base_url: str, timeout: float = 2.0) -> None:
         self._base = base_url.rstrip("/")
@@ -29,22 +38,33 @@ class DaemonClient:
             with urllib.request.urlopen(url, timeout=self._timeout) as r:
                 return json.loads(r.read().decode()), 200
         except urllib.error.HTTPError as e:
-            return None, e.code
+            body = e.read()
+            try:
+                detail = json.loads(body.decode()).get("error", e.reason)
+            except (ValueError, AttributeError):
+                detail = e.reason
+            return detail, e.code
         except (urllib.error.URLError, ConnectionError, OSError) as e:
             raise DaemonUnreachable(str(e))
 
     def health(self) -> dict:
-        data, _ = self._get("/health")
+        data, code = self._get("/health")
+        if code != 200:
+            raise DaemonError(code, str(data))
         return data
 
     def flows(self, **filters) -> list[dict]:
-        data, _ = self._get("/flows", filters)
+        data, code = self._get("/flows", filters)
+        if code != 200:
+            raise DaemonError(code, str(data))
         return data
 
     def flow(self, flow_id: str) -> dict | None:
         data, code = self._get(f"/flow/{urllib.parse.quote(flow_id)}")
-        return None if code == 404 else data
+        return data if code == 200 else None
 
     def search(self, pattern: str, scope: str = "all", limit: int = 50) -> list[dict]:
-        data, _ = self._get("/search", {"pattern": pattern, "scope": scope, "limit": limit})
+        data, code = self._get("/search", {"pattern": pattern, "scope": scope, "limit": limit})
+        if code != 200:
+            raise DaemonError(code, str(data))
         return data

@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from pare_mitm_mcp.config import load_config
-from pare_mitm_mcp.client import DaemonClient, DaemonUnreachable
+from pare_mitm_mcp.client import DaemonClient, DaemonUnreachable, DaemonError
 
 CFG = load_config()
 
@@ -44,6 +44,8 @@ async def list_flows(host: str = "", method: str = "", status: int | None = None
             since=since, limit=limit)
     except DaemonUnreachable:
         return _err(_DOWN)
+    except DaemonError as e:
+        return _err(f"list failed: {e.detail}", e)
     n_err = sum(1 for r in rows if r["kind"] == "error")
     hint = f" ({n_err} tls-error rows — pinning?)" if n_err else ""
     return _ok(f"{len(rows)} flows{hint}", rows=rows)
@@ -64,4 +66,6 @@ async def search_flows(pattern: str, scope: str = "all", limit: int = 50) -> str
         hits = _client().search(pattern, scope, limit)
     except DaemonUnreachable:
         return _err(_DOWN)
+    except DaemonError as e:
+        return _err(f"search failed: {e.detail}", e)
     return _ok(f"{len(hits)} matches for {pattern!r} in {scope}", hits=hits)

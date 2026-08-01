@@ -1,5 +1,5 @@
 import pytest
-from pare_mitm_mcp.client import DaemonClient, DaemonUnreachable
+from pare_mitm_mcp.client import DaemonClient, DaemonError, DaemonUnreachable
 
 
 def test_client_health_and_flows(control):
@@ -21,3 +21,10 @@ def test_client_unreachable_raises():
     c = DaemonClient("http://127.0.0.1:1", timeout=0.3)  # nothing listening
     with pytest.raises(DaemonUnreachable):
         c.health()
+
+
+def test_client_search_bad_regex_raises_daemon_error(control):
+    srv, _ = control
+    c = DaemonClient(srv.url)
+    with pytest.raises(DaemonError):
+        c.search("(")
