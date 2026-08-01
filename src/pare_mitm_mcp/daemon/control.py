@@ -1,11 +1,24 @@
 from __future__ import annotations
 
+import ipaddress
 import json
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 from pare_mitm_mcp.daemon.store import FlowStore
+
+_LOOPBACK_HOSTS = {"localhost"}
+
+
+def _is_loopback(host: str) -> bool:
+    if host in _LOOPBACK_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 class ControlServer:
@@ -17,6 +30,12 @@ class ControlServer:
         self._thread: threading.Thread | None = None
 
     def start(self) -> int:
+        if not _is_loopback(self._host):
+            print(
+                f"warning: control API bound to non-loopback {self._host}; "
+                "it is unauthenticated and exposes captured traffic",
+                file=sys.stderr,
+            )
         store = self._store
 
         class Handler(BaseHTTPRequestHandler):
@@ -66,6 +85,8 @@ class ControlServer:
         if self._httpd is not None:
             self._httpd.shutdown()
             self._httpd.server_close()
+        if self._thread is not None:
+            self._thread.join(timeout=2)
 
     @property
     def url(self) -> str:

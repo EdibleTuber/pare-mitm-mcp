@@ -29,11 +29,12 @@ def FlowStore_summary_keys():
 
 def test_ring_buffer_evicts_oldest():
     s = FlowStore(max_flows=2)
-    s.add(_flow(host="a.com", ts=1.0))
+    evicted_id = s.add(_flow(host="a.com", ts=1.0))
     s.add(_flow(host="b.com", ts=2.0))
     s.add(_flow(host="c.com", ts=3.0))
     hosts = [r["host"] for r in s.summaries()]
     assert hosts == ["c.com", "b.com"]  # a evicted
+    assert s.get(evicted_id) is None  # by-id index dropped it too
 
 
 def test_since_and_host_filter():
@@ -44,6 +45,17 @@ def test_since_and_host_filter():
     assert len(s.summaries(since=4.0)) == 2
     assert len(s.summaries(host="a.com")) == 2
     assert len(s.summaries(host="a.com", since=4.0)) == 1
+
+
+def test_method_and_status_filter():
+    s = FlowStore()
+    s.add(_flow(host="a.com", method="GET", status=200, ts=1.0))
+    s.add(_flow(host="a.com", method="POST", status=200, ts=2.0))
+    s.add(_flow(host="a.com", method="POST", status=500, ts=3.0))
+    assert len(s.summaries(method="POST")) == 2
+    assert len(s.summaries(status=500)) == 1
+    assert len(s.summaries(method="POST", status=500)) == 1
+    assert len(s.summaries(method="GET", status=500)) == 0
 
 
 def test_error_rows_counted_and_listed():
@@ -62,6 +74,17 @@ def test_get_returns_full_record():
     rec = s.get(fid)
     assert rec["resp_body"] == '{"secret":"xyz"}'
     assert s.get("nope") is None
+
+
+def test_get_returns_independent_copy():
+    s = FlowStore()
+    fid = s.add(_flow(host="api.example.com", body='{"secret":"xyz"}'))
+    rec = s.get(fid)
+    rec["req_headers"]["Host"] = "mutated.example.com"
+    rec["resp_headers"]["X-Injected"] = "yes"
+    rec2 = s.get(fid)
+    assert rec2["req_headers"]["Host"] == "api.example.com"
+    assert "X-Injected" not in rec2["resp_headers"]
 
 
 def test_search_scopes_and_snippet():

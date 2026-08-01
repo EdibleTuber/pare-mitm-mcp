@@ -1,4 +1,5 @@
 import json
+import urllib.error
 import urllib.request
 
 
@@ -39,3 +40,16 @@ def test_search(control):
     srv, _ = control
     hits = _get(f"{srv.url}/search?pattern=example.com&scope=url")
     assert len(hits) == 2
+
+
+def test_malformed_query_returns_400_and_server_survives(control):
+    srv, _ = control
+    try:
+        _get(f"{srv.url}/flows?status=abc")
+        assert False, "expected 400"
+    except urllib.error.HTTPError as e:
+        assert e.code == 400
+
+    # the daemon must not have died from the bad query
+    h = _get(f"{srv.url}/health")
+    assert h["flows"] == 2

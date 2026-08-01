@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import copy
 import re
 import threading
 from collections import deque
-from typing import Any
 
 SUMMARY_KEYS = ("id", "ts", "kind", "method", "host", "path",
                 "scheme", "status", "content_type", "resp_size", "error")
@@ -54,7 +54,7 @@ class FlowStore:
     def get(self, flow_id: str) -> dict | None:
         with self._lock:
             r = self._by_id.get(flow_id)
-            return dict(r) if r else None
+            return copy.deepcopy(r) if r else None
 
     def search(self, pattern: str, scope: str = "all", limit: int = 50) -> list[dict]:
         rx = re.compile(pattern)
