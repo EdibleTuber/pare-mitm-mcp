@@ -70,6 +70,43 @@ def record_from_error(flow) -> dict[str, Any]:
     }
 
 
+def record_from_tls_failure(data, side: str) -> dict[str, Any]:
+    conn = getattr(data, "conn", None)
+    context = getattr(data, "context", None)
+
+    sni = getattr(conn, "sni", None)
+    host = sni
+    if not host:
+        server = getattr(context, "server", None)
+        address = getattr(server, "address", None)
+        try:
+            host = address[0] if address else ""
+        except (TypeError, IndexError):
+            host = ""
+    host = host or ""
+
+    conn_error = getattr(conn, "error", None)
+    reason = str(conn_error) if conn_error else "unknown TLS handshake failure"
+    error = f"TLS handshake failed ({side}): {reason}"
+
+    return {
+        "ts": time.time(),
+        "kind": "error",
+        "method": None,
+        "host": host,
+        "path": "",
+        "scheme": "https",
+        "status": None,
+        "content_type": None,
+        "resp_size": 0,
+        "error": error,
+        "req_headers": {},
+        "req_body": "",
+        "resp_headers": {},
+        "resp_body": "",
+    }
+
+
 class PareAddon:
     def __init__(self) -> None:
         self.cfg = load_config()
@@ -87,6 +124,12 @@ class PareAddon:
 
     def error(self, flow) -> None:
         self.store.add(record_from_error(flow))
+
+    def tls_failed_client(self, data) -> None:
+        self.store.add(record_from_tls_failure(data, "client"))
+
+    def tls_failed_server(self, data) -> None:
+        self.store.add(record_from_tls_failure(data, "server"))
 
 
 addons = [PareAddon()]
