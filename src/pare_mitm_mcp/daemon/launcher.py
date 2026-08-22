@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import shutil
 import subprocess
 import sys
@@ -17,6 +18,57 @@ _ACTIONABLE_NOT_FOUND = (
 
 def addon_path() -> str:
     return os.path.join(os.path.dirname(__file__), "addon.py")
+
+
+def _token_path(cfg: Config) -> str:
+    return os.path.join(cfg.state_dir, "web_token")
+
+
+def _log_path(cfg: Config) -> str:
+    return os.path.join(cfg.state_dir, "daemon.log")
+
+
+def resolve_web_token(cfg: Config) -> str:
+    """Resolve the mitmweb UI auth token (the `web_password` value).
+
+    Precedence:
+      1. cfg.web_password (PARE_MITM_WEB_PASSWORD) — explicit operator override.
+      2. a token previously persisted at <state_dir>/web_token, so the UI URL
+         stays stable across daemon restarts.
+      3. a freshly generated token, persisted to that file for next time.
+
+    Never raises: if state_dir can't be read or written (permissions, missing
+    disk, etc.), falls back to an in-memory generated token so `up` still
+    works — just without a stable token across restarts.
+    """
+    if cfg.web_password:
+        return cfg.web_password
+
+    token_path = _token_path(cfg)
+    try:
+        with open(token_path, "r") as f:
+            existing = f.read().strip()
+        if existing:
+            return existing
+    except OSError:
+        pass
+
+    token = secrets.token_hex(16)
+    try:
+        os.makedirs(cfg.state_dir, exist_ok=True)
+        fd = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, token.encode())
+        finally:
+            os.close(fd)
+        os.chmod(token_path, 0o600)  # belt-and-braces: os.open's mode is umask-subject
+    except OSError:
+        pass
+    return token
+
+
+def ui_url(cfg: Config, token: str) -> str:
+    return f"http://127.0.0.1:{cfg.web_port}/?token={token}"
 
 
 def is_up(cfg: Config) -> bool:
@@ -79,6 +131,7 @@ def build_mitmweb_cmd(cfg: Config) -> list[str]:
     binary = resolve_mitmweb(cfg)
     if binary is None:
         raise FileNotFoundError(_ACTIONABLE_NOT_FOUND)
+    token = resolve_web_token(cfg)
     return [
         binary,
         "-s", addon_path(),
@@ -87,17 +140,33 @@ def build_mitmweb_cmd(cfg: Config) -> list[str]:
         "--web-host", "127.0.0.1",            # human UI stays local
         "--web-port", str(cfg.web_port),
         "--set", "web_open_browser=false",
+        "--set", f"web_password={token}",
     ]
+
+
+def _open_log_for_append(cfg: Config):
+    """Best-effort log file for mitmweb's stdout/stderr.
+
+    Falls back to DEVNULL if state_dir can't be created/opened, so a
+    permissions problem there doesn't block `up` — it just means we lose
+    diagnostics for this run instead of crashing.
+    """
+    try:
+        os.makedirs(cfg.state_dir, exist_ok=True)
+        return open(_log_path(cfg), "ab")
+    except OSError:
+        return subprocess.DEVNULL
 
 
 def _up(cfg: Config) -> int:
     if is_up(cfg):
         print("mitm daemon already up")
+        print(f"ui: {ui_url(cfg, resolve_web_token(cfg))}")
         return 0
     try:
         cmd = build_mitmweb_cmd(cfg)
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         start_new_session=True)
+        log_f = _open_log_for_append(cfg)
+        subprocess.Popen(cmd, stdout=log_f, stderr=log_f, start_new_session=True)
     except FileNotFoundError as e:
         print(str(e) or _ACTIONABLE_NOT_FOUND, file=sys.stderr)
         return 2
@@ -105,10 +174,12 @@ def _up(cfg: Config) -> int:
         if is_up(cfg):
             print(f"mitm daemon up (proxy :{cfg.proxy_port}, ui :{cfg.web_port}, "
                   f"control :{cfg.control_port}, mitmweb: {cmd[0]})")
+            print(f"ui: {ui_url(cfg, resolve_web_token(cfg))}")
             return 0
         time.sleep(0.1)
     print("mitm daemon did not come up within 5s — check the port isn't held "
-          f"(:{cfg.proxy_port}/:{cfg.web_port}/:{cfg.control_port})", file=sys.stderr)
+          f"(:{cfg.proxy_port}/:{cfg.web_port}/:{cfg.control_port}); "
+          f"see {_log_path(cfg)} for mitmweb's output", file=sys.stderr)
     return 1
 
 
@@ -116,6 +187,7 @@ def _status(cfg: Config) -> int:
     if is_up(cfg):
         h = DaemonClient.from_config(cfg).health()
         print(f"up — {h['flows']} flows, {h['tls_errors']} tls-errors")
+        print(f"ui: {ui_url(cfg, resolve_web_token(cfg))}")
         return 0
     print("down")
     return 0
