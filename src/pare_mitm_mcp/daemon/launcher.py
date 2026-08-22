@@ -166,7 +166,11 @@ def _up(cfg: Config) -> int:
     try:
         cmd = build_mitmweb_cmd(cfg)
         log_f = _open_log_for_append(cfg)
-        subprocess.Popen(cmd, stdout=log_f, stderr=log_f, start_new_session=True)
+        # PYTHONUNBUFFERED: stdio block-buffers when redirected to a file, so
+        # startup/crash lines would sit unflushed in the child's buffer — which
+        # defeats the point of capturing the log for diagnosis.
+        subprocess.Popen(cmd, stdout=log_f, stderr=log_f, start_new_session=True,
+                         env={**os.environ, "PYTHONUNBUFFERED": "1"})
     except FileNotFoundError as e:
         print(str(e) or _ACTIONABLE_NOT_FOUND, file=sys.stderr)
         return 2
