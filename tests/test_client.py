@@ -28,3 +28,35 @@ def test_client_search_bad_regex_raises_daemon_error(control):
     c = DaemonClient(srv.url)
     with pytest.raises(DaemonError):
         c.search("(")
+
+
+def test_client_add_modification_rule_succeeds(control):
+    srv, _ = control
+    c = DaemonClient(srv.url)
+    rid = c.add_rule("modify", scope="host", pattern="foo",
+                      target="req_headers", replacement="bar", header_name="X-Foo")
+    assert rid.startswith("rule_")
+
+
+def test_client_add_blocking_rule_succeeds(control):
+    srv, _ = control
+    c = DaemonClient(srv.url)
+    rid = c.add_rule("block", scope="host", pattern="foo")
+    assert rid.startswith("rule_")
+
+
+def test_client_add_modification_rule_rejects_invalid_regex(control):
+    srv, _ = control
+    c = DaemonClient(srv.url)
+    with pytest.raises(DaemonError):
+        c.add_rule("modify", scope="host", pattern="(", target="req_headers",
+                    header_name="X-Foo", replacement="bar")
+    assert c.rules() == []
+
+
+def test_client_add_blocking_rule_rejects_invalid_regex(control):
+    srv, _ = control
+    c = DaemonClient(srv.url)
+    with pytest.raises(DaemonError):
+        c.add_rule("block", scope="host", pattern="(")
+    assert c.rules() == []

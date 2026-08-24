@@ -1,5 +1,5 @@
 import pytest
-from pare_mitm_mcp.daemon.store import FlowStore
+from pare_mitm_mcp.daemon.store import FlowStore, RuleStore
 from pare_mitm_mcp.daemon.control import ControlServer
 
 
@@ -18,8 +18,9 @@ def seed(store: FlowStore) -> None:
 @pytest.fixture
 def control():
     store = FlowStore()
+    rule_store = RuleStore()
     seed(store)
-    srv = ControlServer(store, host="127.0.0.1", port=0)  # port 0 = ephemeral
+    srv = ControlServer(store, rule_store, host="127.0.0.1", port=0)  # port 0 = ephemeral
     srv.start()
     try:
         yield srv, store

@@ -4,9 +4,23 @@ import copy
 import re
 import threading
 from collections import deque
+from dataclasses import dataclass
+from typing import Any, Literal, Optional
 
 SUMMARY_KEYS = ("id", "ts", "kind", "method", "host", "path",
                 "scheme", "status", "content_type", "resp_size", "error")
+
+
+@dataclass
+class InterceptionRule:
+    rule_id: str
+    action: Literal["BLOCK", "MODIFY"]
+    scope: Literal["host", "path", "url", "headers", "req_body", "resp_body"]
+    pattern: str  # regex
+    target: Optional[Literal["req_headers", "req_body", "resp_headers", "resp_body", "status"]] = None
+    replacement: Optional[str] = None
+    header_name: Optional[str] = None  # For header modifications
+
 
 
 class FlowStore:
@@ -78,6 +92,44 @@ class FlowStore:
         tls_errors = sum(1 for r in rows if r["kind"] == "error")
         last_ts = rows[-1]["ts"] if rows else None
         return {"flows": len(rows), "tls_errors": tls_errors, "last_flow_ts": last_ts}
+
+
+class RuleStore:
+    """Thread-safe storage for interception rules."""
+
+    def __init__(self) -> None:
+        self._rules: dict[str, InterceptionRule] = {}
+        self._lock = threading.Lock()
+        self._seq = 0
+
+    def add(self, rule: InterceptionRule) -> str:
+        with self._lock:
+            self._seq += 1
+            rid = f"rule_{self._seq:04x}"
+            # If the user provided a rule_id, we'll overwrite it with our own
+            # to ensure uniqueness and control.
+            rule.rule_id = rid
+            self._rules[rid] = rule
+            return rid
+
+    def remove(self, rule_id: str) -> bool:
+        with self._lock:
+            if rule_id in self._rules:
+                del self._rules[rule_id]
+                return True
+            return False
+
+    def clear(self) -> None:
+        with self._lock:
+            self._rules.clear()
+
+    def get_all(self) -> list[InterceptionRule]:
+        with self._lock:
+            return list(self._rules.values())
+
+    def get(self, rule_id: str) -> InterceptionRule | None:
+        with self._lock:
+            return self._rules.get(rule_id)
 
 
 def _scope_text(r: dict, scope: str) -> str:

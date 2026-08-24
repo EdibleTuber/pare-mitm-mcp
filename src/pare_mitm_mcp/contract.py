@@ -46,6 +46,28 @@ TOOL_SPECS = [
              "Use this to disambiguate an empty capture: daemon down vs nothing-triggered-yet vs "
              "pinning breaking the handshake (tls_errors>0).",
              _in()),
+    ToolSpec("list_rules", "low",
+             "RULES. List all active interception rules.",
+             _in()),
+    ToolSpec("add_blocking_rule", "high",
+             "RULES. Add a rule to block traffic matching a regex pattern on a specific scope (host|path|url|headers|req_body|resp_body).",
+             _in(scope={"type": "string"}, pattern={"type": "string"})),
+    ToolSpec("add_modification_rule", "high",
+             "RULES. Add a rule to modify traffic. Target can be req_headers, req_body, resp_headers, resp_body, or status. "
+             "If targeting headers, provide header_name.",
+             _in(scope={"type": "string"}, pattern={"type": "string"}, target={"type": "string"}, replacement={"type": "string"}, header_name={"type": "string"})),
+    ToolSpec("delete_rule", "low",
+             "RULES. Delete an interception rule by its ID.",
+             _in(rule_id={"type": "string"})),
+    ToolSpec("clear_rules", "low",
+             "RULES. Clear all interception rules.",
+             _in()),
+    ToolSpec("inject_request", "critical",
+             "ACTION. Inject a new HTTP request through the proxy. This will be subject to interception rules.",
+             _in(method={"type": "string"}, url={"type": "string"}, headers={"type": "object"}, body={"type": "string"})),
+    ToolSpec("replay_flow", "high",
+             "ACTION. Replay a previously captured flow. This will be subject to interception rules.",
+             _in(id={"type": "string"})),
 ]
 
 

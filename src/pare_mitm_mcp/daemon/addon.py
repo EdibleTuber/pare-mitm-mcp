@@ -1,13 +1,53 @@
 from __future__ import annotations
 
+import re
+import sys
 import time
-from typing import Any
+from typing import Any, Literal, Optional
 
 from pare_mitm_mcp.config import load_config
-from pare_mitm_mcp.daemon.store import FlowStore
+from pare_mitm_mcp.daemon.store import FlowStore, RuleStore, InterceptionRule
 from pare_mitm_mcp.daemon.control import ControlServer
 
 _TEXT_CT = ("json", "text", "xml", "x-www-form-urlencoded", "javascript")
+
+
+class InterceptionManager:
+    """Handles rule matching and application for mitmproxy flows."""
+
+    def __init__(self, rule_store: RuleStore) -> None:
+        self.rule_store = rule_store
+
+    def get_blocking_rule(self, flow) -> Optional[InterceptionRule]:
+        for rule in self.rule_store.get_all():
+            if rule.action == "BLOCK" and self._matches(rule, flow):
+                return rule
+        return None
+
+    def get_modification_rules(self, flow) -> list[InterceptionRule]:
+        return [
+            rule for rule in self.rule_store.get_all()
+            if rule.action == "MODIFY" and self._matches(rule, flow)
+        ]
+
+    def _matches(self, rule: InterceptionRule, flow) -> bool:
+        # Determine what to check based on scope
+        if rule.scope == "host":
+            val = flow.request.host
+        elif rule.scope == "path":
+            val = flow.request.path
+        elif rule.scope == "url":
+            val = f"{flow.request.scheme}://{flow.request.host}{flow.request.path}"
+        elif rule.scope == "headers":
+            val = str(flow.request.headers) + str(flow.response.headers if flow.response else "")
+        elif rule.scope == "req_body":
+            val = flow.request.get_text(strict=False) or ""
+        elif rule.scope == "resp_body":
+            val = flow.response.get_text(strict=False) if flow.response else ""
+        else:
+            return False
+
+        return bool(re.search(rule.pattern, val))
 
 
 def _decode_body(message) -> str:
@@ -111,7 +151,9 @@ class PareAddon:
     def __init__(self) -> None:
         self.cfg = load_config()
         self.store = FlowStore(max_flows=self.cfg.max_flows)
-        self.control = ControlServer(self.store, self.cfg.control_host, self.cfg.control_port)
+        self.rule_store = RuleStore()
+        self.interceptor = InterceptionManager(self.rule_store)
+        self.control = ControlServer(self.store, self.rule_store, self.cfg.control_host, self.cfg.control_port)
         self._started = False
 
     def load(self, loader) -> None:
@@ -119,7 +161,63 @@ class PareAddon:
             self.control.start()
             self._started = True
 
+    def request(self, flow) -> None:
+        try:
+            blocking_rule = self.interceptor.get_blocking_rule(flow)
+        except re.error as e:
+            print(f"pare-mitm: skipping blocking rule (bad regex): {e}", file=sys.stderr)
+            blocking_rule = None
+        if blocking_rule:
+            flow.kill()
+            return
+
+        try:
+            mod_rules = self.interceptor.get_modification_rules(flow)
+        except re.error as e:
+            print(f"pare-mitm: skipping modification rules (bad regex): {e}", file=sys.stderr)
+            mod_rules = []
+
+        for rule in mod_rules:
+            try:
+                if rule.target == "req_headers":
+                    if rule.header_name:
+                        if rule.replacement:
+                            flow.request.headers[rule.header_name] = rule.replacement
+                        else:
+                            flow.request.headers.pop(rule.header_name, None)
+                elif rule.target == "req_body":
+                    if rule.replacement is not None:
+                        current = flow.request.get_text(strict=False) or ""
+                        flow.request.set_text(re.sub(rule.pattern, rule.replacement, current))
+                # ... other targets
+            except Exception as e:
+                print(f"pare-mitm: rule {rule.rule_id!r} failed to apply: {e}", file=sys.stderr)
+
     def response(self, flow) -> None:
+        try:
+            mod_rules = self.interceptor.get_modification_rules(flow)
+        except re.error as e:
+            print(f"pare-mitm: skipping modification rules (bad regex): {e}", file=sys.stderr)
+            mod_rules = []
+
+        for rule in mod_rules:
+            try:
+                if rule.target == "resp_headers":
+                    if rule.header_name:
+                        if rule.replacement:
+                            flow.response.headers[rule.header_name] = rule.replacement
+                        else:
+                            flow.response.headers.pop(rule.header_name, None)
+                elif rule.target == "resp_body":
+                    if rule.replacement is not None:
+                        current = flow.response.get_text(strict=False) or ""
+                        flow.response.set_text(re.sub(rule.pattern, rule.replacement, current))
+                elif rule.target == "status":
+                    if rule.replacement:
+                        flow.response.status_code = int(rule.replacement)
+            except Exception as e:
+                print(f"pare-mitm: rule {rule.rule_id!r} failed to apply: {e}", file=sys.stderr)
+
         self.store.add(record_from_flow(flow))
 
     def error(self, flow) -> None:

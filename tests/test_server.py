@@ -13,4 +13,4 @@ def test_build_server_advertises_risk_tier_over_the_wire():
     assert {s.name for s in TOOL_SPECS} == set(by_name)
     for spec in TOOL_SPECS:
         tool = by_name[spec.name]
-        assert tool.meta == {RISK_TIER_META_KEY: "low"}
+        assert tool.meta == {RISK_TIER_META_KEY: spec.risk_tier}

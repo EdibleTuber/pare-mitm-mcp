@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import re
 import sys
 import threading
+import urllib.request
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-from pare_mitm_mcp.daemon.store import FlowStore
+from pare_mitm_mcp.daemon.store import FlowStore, RuleStore, InterceptionRule
 
 _LOOPBACK_HOSTS = {"localhost"}
 
@@ -22,10 +25,12 @@ def _is_loopback(host: str) -> bool:
 
 
 class ControlServer:
-    def __init__(self, store: FlowStore, host: str = "127.0.0.1", port: int = 8788) -> None:
+    def __init__(self, store: FlowStore, rule_store: RuleStore, host: str = "127.0.0.1", port: int = 8788, proxy_port: int = 8080) -> None:
         self._store = store
+        self._rule_store = rule_store
         self._host = host
         self._port = port
+        self._proxy_port = proxy_port
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -36,7 +41,9 @@ class ControlServer:
                 "it is unauthenticated and exposes captured traffic",
                 file=sys.stderr,
             )
+
         store = self._store
+        rule_store = self._rule_store
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *a):  # silence
@@ -71,8 +78,133 @@ class ControlServer:
                         return self._send(200, store.search(
                             q.get("pattern", ""), q.get("scope", "all"),
                             int(q.get("limit", "50"))))
+                    if u.path == "/rules":
+                        return self._send(200, [{"rule_id": r.rule_id, **r.__dict__} for r in rule_store.get_all()])
                     return self._send(404, {"error": "no such route"})
-                except Exception as e:  # never crash the daemon on a bad query
+                except Exception as e:
+                    return self._send(400, {"error": str(e)})
+
+            def do_POST(self):
+                u = urlparse(self.path)
+                content_length = int(self.headers.get("Content-Length", 0))
+                body_bytes = self.rfile.read(content_length)
+                try:
+                    payload = json.loads(body_bytes) if body_bytes else {}
+                except json.JSONDecodeError:
+                    return self._send(400, {"error": "invalid JSON"})
+
+                try:
+                    if u.path == "/rules/block":
+                        pattern = payload.get("pattern", "")
+                        try:
+                            re.compile(pattern)
+                        except re.error as e:
+                            return self._send(400, {"error": f"bad pattern: {e}"})
+                        rule = InterceptionRule(
+                            rule_id="",
+                            action="BLOCK",
+                            scope=payload.get("scope", "host"),
+                            pattern=pattern,
+                            target=None,
+                            replacement=None,
+                            header_name=None
+                        )
+                        rid = rule_store.add(rule)
+                        return self._send(201, {"rule_id": rid})
+
+                    if u.path == "/rules/modify":
+                        pattern = payload.get("pattern", "")
+                        try:
+                            re.compile(pattern)
+                        except re.error as e:
+                            return self._send(400, {"error": f"bad pattern: {e}"})
+                        rule = InterceptionRule(
+                            rule_id="",
+                            action="MODIFY",
+                            scope=payload.get("scope", "host"),
+                            pattern=pattern,
+                            target=payload.get("target"),
+                            replacement=payload.get("replacement"),
+                            header_name=payload.get("header_name")
+                        )
+                        rid = rule_store.add(rule)
+                        return self._send(201, {"rule_id": rid})
+
+                    if u.path == "/rules/clear":
+                        rule_store.clear()
+                        return self._send(200, {"status": "cleared"})
+
+                    if u.path == "/inject":
+                        # Reconstruct request from payload
+                        method = payload.get("method", "GET")
+                        url = payload.get("url")
+                        if not url:
+                            return self._send(400, {"error": "url is required"})
+                        
+                        headers = payload.get("headers", {})
+                        body = payload.get("body", "")
+                        
+                        proxy_handler = urllib.request.ProxyHandler({
+                            'http': f'http://127.0.0.1:{proxy_port}',
+                            'https': f'http://127.0.0.1:{proxy_port}'
+                        })
+                        opener = urllib.request.build_opener(proxy_handler)
+                        
+                        req = urllib.request.Request(url, data=body.encode() if body else None, headers=headers, method=method)
+                        try:
+                            with opener.open(req, timeout=10) as response:
+                                return self._send(200, {"status": "injected", "status_code": response.status})
+                        except Exception as e:
+                            return self._send(500, {"error": str(e)})
+
+                    if u.path == "/replay":
+                        flow_id = payload.get("id")
+                        if not flow_id:
+                            return self._send(400, {"error": "id is required"})
+                        
+                        rec = store.get(flow_id)
+                        if not rec or rec.get("kind") != "flow":
+                            return self._send(404, {"error": "no such flow"})
+                        
+                        method = rec["method"]
+                        url = f"{rec['scheme']}://{rec['host']}{rec['path']}"
+                        headers = rec["req_headers"]
+                        body = rec["req_body"]
+                        
+                        proxy_handler = urllib.request.ProxyHandler({
+                            'http': f'http://127.0.0.1:{proxy_port}',
+                            'https': f'http://127.0.0.1:{proxy_port}'
+                        })
+                        opener = urllib.request.build_opener(proxy_handler)
+                        
+                        # Note: body might be '<binary N bytes>' if it was binary. 
+                        # This is a limitation of the current storage.
+                        req_data = None
+                        if body and not body.startswith("<binary"):
+                            req_data = body.encode()
+                        
+                        req = urllib.request.Request(url, data=req_data, headers=headers, method=method)
+                        try:
+                            with opener.open(req, timeout=10) as response:
+                                return self._send(200, {"status": "replayed", "status_code": response.status})
+                        except Exception as e:
+                            return self._send(500, {"error": str(e)})
+
+                    return self._send(404, {"error": "no such route"})
+                except Exception as e:
+                    return self._send(400, {"error": str(e)})
+
+            def do_DELETE(self):
+                u = urlparse(self.path)
+                try:
+                    if u.path.startswith("/rules/"):
+                        rule_id = u.path[len("/rules/"):]
+                        if rule_store.remove(rule_id):
+                            return self._send(200, {"status": "deleted"})
+                        else:
+                            return self._send(404, {"error": "no such rule"})
+                    return self._send(404, {"error": "no such route"})
+                except Exception as e:
                     return self._send(400, {"error": str(e)})
 
         self._httpd = ThreadingHTTPServer((self._host, self._port), Handler)
