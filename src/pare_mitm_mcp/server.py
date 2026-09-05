@@ -4,7 +4,7 @@ import json
 
 from mcp.server.fastmcp import FastMCP
 
-from agent_core.workers.risk import RISK_TIER_META_KEY
+from pare_worker_kit import RISK_TIER_META_KEY, run_worker
 from pare_mitm_mcp.contract import TOOL_SPECS
 
 try:
@@ -32,4 +32,4 @@ def _stub_for(name: str):
 
 
 def main() -> None:
-    build_server().run(transport="stdio")
+    run_worker(build_server())
