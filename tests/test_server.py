@@ -1,6 +1,6 @@
 import asyncio
 
-from agent_core.workers.risk import RISK_TIER_META_KEY
+from pare_worker_kit import RISK_TIER_META_KEY
 from pare_mitm_mcp.contract import TOOL_SPECS
 from pare_mitm_mcp.server import build_server
 
