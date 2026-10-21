@@ -71,7 +71,11 @@ TOOL_SPECS = [
              "RULES. Clear all interception rules.",
              _in()),
     ToolSpec("inject_request", "critical",
-             "ACTION. Inject a new HTTP request through the proxy. This will be subject to interception rules.",
+             "ACTION. Forge a new HTTP request into the app-under-test's proxied traffic — to exercise "
+             "an endpoint the app talks to, subject to active interception rules. NOT a web fetch: this "
+             "is only meaningful against a target app whose traffic is routed through the mitm daemon "
+             "(start with /mitm up), it does not retrieve arbitrary URLs for you, and it is pointless on "
+             "a challenge with no network surface. To read a web page, use fetch_url, not this.",
              _in(method={"type": "string"}, url={"type": "string"}, headers={"type": "object"}, body={"type": "string"})),
     ToolSpec("replay_flow", "high",
              "ACTION. Replay a previously captured flow. This will be subject to interception rules.",
